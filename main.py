@@ -123,7 +123,7 @@ class Keyworder:
                 ),
             )
 
-            if not response.text is None:
+            if response.text:
                 metadata = json.loads(response.text)
 
                 self.add_metadata_to_eps(
@@ -182,16 +182,17 @@ if __name__ == "__main__":
         if not has_exif:
             selected.append(path)
             tqdm.write(f"{RED}[X]{DEFAULT} {path}")
+        else:
+            tqdm.write("checking finished")
 
-    if not selected is None:
-        try:
-            if len(selected) < 1:
-                print(f"{YELLOW}[INFO]{DEFAULT} all *.eps file in {workdir} directory has added exif metadata")
-                sys.exit(1)
+    try:
+        if len(selected) < 1:
+            print(f"{YELLOW}[INFO]{DEFAULT} all *.eps file in {workdir} directory has added exif metadata")
+            sys.exit(1)
 
-            print("Generate exif data to file...")
-            selected_paths = selected
-            for path in tqdm(selected_paths):
-                keyworder.analyze_image_for_shutterstock(path)
-        except KeyboardInterrupt as e:
-            print("Process cancalled")
+        print("Generate exif data to file...")
+        selected_paths = selected
+        for path in tqdm(selected_paths):
+            keyworder.analyze_image_for_shutterstock(path)
+    except KeyboardInterrupt as e:
+        print(f"Process cancalled. Error: {e}")
