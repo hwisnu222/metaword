@@ -9,15 +9,19 @@ from tqdm import tqdm
 from exiftool import ExifToolHelper
 import json
 import argparse
+import logging
+from platformdirs import PlatformDirs
 
-load_dotenv()
 
-# colors
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-DEFAULT = "\033[0m"
+def config_dir():
+    dirs = PlatformDirs(appname="metaword")
+    config_path = dirs.user_config_dir
+    os.makedirs(config_path, exist_ok=True)
 
+    return config_path
+
+env_path = os.path.join(config_dir(), ".env")
+load_dotenv(dotenv_path=env_path)
 
 class Keyworder:
     api_key = os.getenv("GEMINI_API_KEY")
@@ -96,13 +100,13 @@ class Keyworder:
                     },
                     params=["-overwrite_original"],  # disable file backup .eps_original
                 )
-            print(f"{GREEN}[SUCCESS]{DEFAULT} added metadata to: {os.path.basename(file_path)}")
+            logging.info(f"Added metadata to: {os.path.basename(file_path)}")
         except Exception as e:
-            print(f"{RED}[ERROR]{DEFAULT} {file_path} file: {e}")
+            print(f"Error {file_path} file: {e}")
 
     def analyze_image_for_shutterstock(self, image_path):
         if not self.api_key:
-            tqdm.write("{RED}[ERROR]{DEFAULT} 'GEMINI_API_KEY' not found")
+            tqdm.write("GEMINI_API_KEY not found")
             sys.exit(1)
 
         try:
@@ -110,7 +114,7 @@ class Keyworder:
 
             img = Image.open(image_path)
             tqdm.write(
-                f"{YELLOW}[PROGRESS]{DEFAULT} Image is loaded: '{image_path}'. Send to Gemini server"
+                f"Image is loaded: '{image_path}'. Send to Gemini server"
             )
 
             response = client.models.generate_content(
@@ -133,66 +137,67 @@ class Keyworder:
                     keywords=metadata.get("keywords"),
                     categories=metadata.get("categories"),
                 )
-                return
+                logging.info("Success add metadata to file")
+                return metadata
 
-            tqdm.write(f"{RED}[ERROR]{DEFAULT} failed get response server")
+            tqdm.write("Failed get response server")
 
         except FileNotFoundError:
-            tqdm.write(f"{RED}[ERROR]{DEFAULT} image not found: {image_path}")
+            tqdm.write(f"Image not found: {image_path}")
         except APIError as e:
-            tqdm.write(f"{RED}[ERROR]{DEFAULT} failed to connect Gemini API. Error: ({e})")
+            tqdm.write(f"Failed to connect Gemini API. Error: ({e})")
         except Exception as e:
-            tqdm.write(f"{RED}[ERROR]{DEFAULT} : {e}")
+            tqdm.write(f"Error: {e}")
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-l', '--limit', help="limit file check in newest")
-    parser.add_argument('-p', '--path', help="EPS files of directory path")
+    parser.add_argument('-i', "--include", help="specific files")
+    parser.add_argument("-d", "--directory", help="source directory")
+    parser.add_argument("-e", "--ext", help="extension target")
+    parser.add_argument("-g", "--json", action="store_true", help="json result")
+
     args = parser.parse_args()
 
     keyworder = Keyworder()
 
-    workdir = "./stock/eps"
-    if args.path and os.path.exists(workdir):
-        workdir = args.path
+    config = config_dir()
+    env_file = Path(os.path.join(config, ".env"))
+    if not env_file.exists():
+        logging.info("environment variable doesn't exists")
+        api_key = input("Gemini api key: ")
 
-    stock = Path(workdir)
-    if not stock.exists():
-        print(f"creating {workdir} directory")
-        os.makedirs(stock, exist_ok=True)
+        with open(env_file, "a") as file:
+            file.write(f"GEMINI_API_KEY={api_key}")
 
-    paths = list(stock.glob("*.eps"))
+        logging.info("Success added api key")
 
-    if not len(paths) > 0:
-        print(f"{RED}[ERROR]{DEFAULT} please add file *.eps in {workdir} folder")
-        sys.exit(1)
 
-    paths.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    if args.directory:
+        source_dir = Path(args.directory)
+        paths = list(source_dir.glob(args.ext))
 
-    print(f"Checking exif data in {workdir} directory...")
-    selected = []
-    limit = 8
-    if args.limit:
-        limit = int(args.limit)
-    for path in tqdm(paths[:limit]):
-        # select file only don't have exif
-        has_exif = keyworder.has_exif(path)
-        if not has_exif:
-            selected.append(path)
-            tqdm.write(f"{RED}[X]{DEFAULT} {path}")
-        else:
-            tqdm.write("checking finished")
-
-    try:
-        if len(selected) < 1:
-            print(f"{YELLOW}[INFO]{DEFAULT} all *.eps file in {workdir} directory has added exif metadata")
+        if not len(paths) > 0:
+            logging.error(f"please add file in {args.directory} folder")
             sys.exit(1)
 
-        print("Generate exif data to file...")
-        selected_paths = selected
-        for path in tqdm(selected_paths):
-            keyworder.analyze_image_for_shutterstock(path)
-    except KeyboardInterrupt as e:
-        print(f"Process cancalled. Error: {e}")
+        paths.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+        try:
+            logging.info("Generate exif data to file...")
+            for path in tqdm(paths):
+                keyworder.analyze_image_for_shutterstock(path)
+        except KeyboardInterrupt as e:
+            print(f"Process cancalled. Error: {e}")
+
+    if args.include:
+        try:
+            logging.info("Generate exif data to file...")
+            res = keyworder.analyze_image_for_shutterstock(args.include)
+
+            if args.json:
+                print(json.dumps(res, indent=2))
+        except KeyboardInterrupt as e:
+            logging.error(f"Process cancalled. Error: {e}")

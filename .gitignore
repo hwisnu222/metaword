@@ -1,4 +1,12 @@
 env/
+.venv/
 .env
 stock/
 label/
+
+# Python build/package artifacts
+*.egg-info/
+.egg-info/
+build/
+dist/
+__pycache__
