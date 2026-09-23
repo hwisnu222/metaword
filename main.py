@@ -1,16 +1,17 @@
-import sys
+import argparse
+import json
+import logging
 import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from exiftool import ExifToolHelper
 from google import genai
 from google.genai.errors import APIError
 from PIL import Image
-from dotenv import load_dotenv
-from pathlib import Path
-from tqdm import tqdm
-from exiftool import ExifToolHelper
-import json
-import argparse
-import logging
 from platformdirs import PlatformDirs
+from tqdm import tqdm
 
 
 def config_dir():
@@ -20,8 +21,13 @@ def config_dir():
 
     return config_path
 
+
 env_path = os.path.join(config_dir(), ".env")
 load_dotenv(dotenv_path=env_path)
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(filename)s %(message)s"
+)
 
 class Keyworder:
     api_key = os.getenv("GEMINI_API_KEY")
@@ -102,7 +108,7 @@ class Keyworder:
                 )
             logging.info(f"Added metadata to: {os.path.basename(file_path)}")
         except Exception as e:
-            print(f"Error {file_path} file: {e}")
+            logging.error(f"Error {file_path} file: {e}")
 
     def analyze_image_for_shutterstock(self, image_path):
         if not self.api_key:
@@ -113,9 +119,7 @@ class Keyworder:
             client = genai.Client(api_key=self.api_key)
 
             img = Image.open(image_path)
-            tqdm.write(
-                f"Image is loaded: '{image_path}'. Send to Gemini server"
-            )
+            logging.info(f"Image is loaded: '{image_path}'. Send to Gemini server")
 
             response = client.models.generate_content(
                 model=self.MODEL_NAME,
@@ -137,24 +141,25 @@ class Keyworder:
                     keywords=metadata.get("keywords"),
                     categories=metadata.get("categories"),
                 )
-                logging.info("Success add metadata to file")
+                logging.info(f"Success add metadata to {image_path} file")
                 return metadata
 
-            tqdm.write("Failed get response server")
+            logging.error("Failed get response server")
 
         except FileNotFoundError:
-            tqdm.write(f"Image not found: {image_path}")
+            logging.error(f"Image not found: {image_path}")
         except APIError as e:
-            tqdm.write(f"Failed to connect Gemini API. Error: ({e})")
+            logging.error(f"Failed to connect Gemini API. Error: ({e})")
         except Exception as e:
-            tqdm.write(f"Error: {e}")
+            logging.error(f"Error: {e}")
 
 
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-l', '--limit', help="limit file check in newest")
-    parser.add_argument('-i', "--include", help="specific files")
+    parser.add_argument("-l", "--limit", help="limit file check in newest")
+    parser.add_argument("-i", "--include", help="specific files")
+    parser.add_argument("-b", "--bulk", nargs="+", help="bulk file")
     parser.add_argument("-d", "--directory", help="source directory")
     parser.add_argument("-e", "--ext", help="extension target")
     parser.add_argument("-g", "--json", action="store_true", help="json result")
@@ -170,9 +175,25 @@ def main():
         api_key = input("Gemini api key: ")
 
         with open(env_file, "a") as file:
-            file.write(f"GEMINI_API_KEY={api_key}")
+            logging.error(f"GEMINI_API_KEY={api_key}")
 
         logging.info("Success added api key")
+
+    if args.bulk:
+        for item in args.bulk:
+            path = Path(item)
+            if path.exists():
+                try:
+                    logging.info("Generate exif data to {path} file...")
+                    res = keyworder.analyze_image_for_shutterstock(path)
+
+                    if args.json:
+                        print(json.dumps(res, indent=2))
+
+                except KeyboardInterrupt as e:
+                    logging.error(f"Process cancalled. Error: {e}")
+            else:
+                logging.error(f"{path} path is not exists")
 
 
     if args.directory:
@@ -199,5 +220,10 @@ def main():
 
             if args.json:
                 print(json.dumps(res, indent=2))
+
+            logging.info("Success add metadata into {args.include}")
         except KeyboardInterrupt as e:
             logging.error(f"Process cancalled. Error: {e}")
+
+if __name__ == "__main__":
+    main()
