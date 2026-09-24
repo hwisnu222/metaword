@@ -175,7 +175,7 @@ def main():
         api_key = input("Gemini api key: ")
 
         with open(env_file, "a") as file:
-            logging.error(f"GEMINI_API_KEY={api_key}")
+            file.write(f"GEMINI_API_KEY={api_key}")
 
         logging.info("Success added api key")
 
@@ -184,7 +184,7 @@ def main():
             path = Path(item)
             if path.exists():
                 try:
-                    logging.info("Generate exif data to {path} file...")
+                    logging.info(f"Generate exif data to {path} file...")
                     res = keyworder.analyze_image_for_shutterstock(path)
 
                     if args.json:
