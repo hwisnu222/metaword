@@ -13,6 +13,8 @@ from PIL import Image
 from platformdirs import PlatformDirs
 from tqdm import tqdm
 
+from src.ui.window import run
+
 
 def config_dir():
     dirs = PlatformDirs(appname="metaword")
@@ -89,7 +91,6 @@ class Keyworder:
             return False
 
     def add_metadata_to_eps(self, file_path, title, description, keywords, categories):
-
         try:
             with ExifToolHelper() as et:
                 et.set_tags(
