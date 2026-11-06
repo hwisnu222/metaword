@@ -119,18 +119,19 @@ class Keyworder:
         try:
             client = genai.Client(api_key=self.api_key)
 
-            img = Image.open(image_path)
-            logging.info(f"Image is loaded: '{image_path}'. Send to Gemini server")
+            with Image.open(image_path) as img:
+                img.load()
+                logging.info(f"Image is loaded: '{image_path}'. Send to Gemini server")
 
-            response = client.models.generate_content(
-                model=self.MODEL_NAME,
-                contents=img,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=self.SYSTEM_INSTRUCTION,
-                    # change response to json format
-                    response_mime_type="application/json",
-                ),
-            )
+                response = client.models.generate_content(
+                    model=self.MODEL_NAME,
+                    contents=img,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction=self.SYSTEM_INSTRUCTION,
+                        # change response to json format
+                        response_mime_type="application/json",
+                    ),
+                )
 
             if response.text:
                 metadata = json.loads(response.text)

@@ -71,6 +71,10 @@ IMAGE_EXTENSIONS = {
     ".webp",
 }
 
+# Pillow opens these directly; .eps additionally requires Ghostscript.
+# .ai/.svg are vector-only and .heic needs pillow-heif, so skip those.
+GENERATABLE_EXTENSIONS = IMAGE_EXTENSIONS - {".ai", ".heic", ".svg"}
+
 STATUS_COLORS = {
     "info": "#60A5FA",
     "success": "#34D399",
@@ -546,7 +550,8 @@ class FileRow(QFrame):
     def __init__(self, path: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.path = path
-        self.supported = path.suffix.lower() in IMAGE_EXTENSIONS
+        self.is_image = path.suffix.lower() in IMAGE_EXTENSIONS
+        self.can_generate = path.suffix.lower() in GENERATABLE_EXTENSIONS
         self.setObjectName("fileRow")
         self.setAttribute(Qt.WA_Hover, True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -557,7 +562,7 @@ class FileRow(QFrame):
 
         badge = QLabel(path.suffix.lstrip(".").upper()[:4] or "FILE")
         badge.setObjectName("fileBadge")
-        badge.setProperty("kind", "image" if self.supported else "file")
+        badge.setProperty("kind", "image" if self.is_image else "file")
         badge.setFixedSize(44, 44)
         badge.setAlignment(Qt.AlignCenter)
         layout.addWidget(badge)
@@ -600,9 +605,9 @@ class FileRow(QFrame):
         self.add_button.setCursor(Qt.PointingHandCursor)
         self.add_button.setMinimumWidth(118)
         self.add_button.clicked.connect(lambda: self.add_requested.emit(self.path))
-        if not self.supported:
+        if not self.can_generate:
             self.add_button.setEnabled(False)
-            self.add_button.setToolTip("Only image files can be tagged")
+            self.add_button.setToolTip("This format is not supported by the generator")
         layout.addWidget(self.add_button, 0, Qt.AlignVCenter)
 
     @staticmethod
@@ -618,7 +623,7 @@ class FileRow(QFrame):
         self.status_label.setText(text)
 
     def set_busy(self, busy: bool) -> None:
-        self.add_button.setEnabled(not busy and self.supported)
+        self.add_button.setEnabled(not busy and self.can_generate)
         self.add_button.setText("Adding…" if busy else "Add Metadata")
         self.checkbox.setEnabled(not busy)
 
@@ -877,8 +882,9 @@ class MetadataWindow(QWidget):
                 if path.is_file() and not path.name.startswith(".")
             ]
         except OSError as exc:
-            files = []
+            self._filter_rows()
             self.set_status(f"Cannot read directory: {exc}", "error")
+            return
 
         files.sort(
             key=lambda path: (
@@ -947,6 +953,9 @@ class MetadataWindow(QWidget):
             return
 
         row.set_status("Checking metadata…", "info")
+        if path in self._check_workers:
+            return
+
         worker = CheckWorker(path)
         worker.signals.done.connect(self._on_check_done)
         self._check_workers[path] = worker
@@ -968,6 +977,9 @@ class MetadataWindow(QWidget):
 
         row.set_busy(True)
         row.set_status("Generating metadata…", "info")
+        if path in self._add_workers:
+            return
+
         self.set_status(f"Generating metadata for {path.name}…", "info")
 
         worker = AddMetadataWorker(path)
