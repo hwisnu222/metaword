@@ -39,7 +39,9 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -47,6 +49,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizeGrip,
     QSizePolicy,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -173,6 +176,9 @@ QPushButton#primaryButton:disabled {
     background-color: #16202F;
     color: #4B5B70;
 }
+QPushButton#primaryButton:focus {
+    border: 1px solid #93C5FD;
+}
 
 QPushButton#secondaryButton {
     background-color: #121C2B;
@@ -190,6 +196,15 @@ QPushButton#secondaryButton:hover {
 }
 QPushButton#secondaryButton:pressed {
     background-color: #0F172A;
+}
+QPushButton#secondaryButton:focus {
+    border-color: #3B82F6;
+    color: #F8FAFC;
+}
+QPushButton#secondaryButton:disabled {
+    background-color: #0F172A;
+    border-color: #1B2738;
+    color: #475569;
 }
 
 QLineEdit#searchInput {
@@ -293,6 +308,80 @@ QLabel#statusText {
 }
 QLabel#statusMeta {
     color: #475569;
+    font-size: 11px;
+}
+
+QDialog#dialogRoot {
+    background-color: #0B1220;
+    border: 1px solid #1B2738;
+}
+QFrame#dialogHeader {
+    background-color: #0F172A;
+    border-bottom: 1px solid #1B2738;
+}
+QLabel#dialogTitle {
+    color: #F8FAFC;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLabel#dialogSubtitle {
+    color: #64748B;
+    font-size: 10px;
+}
+QScrollArea#dialogScroll {
+    background-color: transparent;
+    border: none;
+}
+QScrollArea#dialogScroll > QWidget > QWidget {
+    background-color: transparent;
+}
+QWidget#dialogContent {
+    background-color: transparent;
+}
+QLabel#sectionTitle {
+    color: #93C5FD;
+    font-size: 11px;
+    font-weight: 700;
+}
+QFrame#metadataCard {
+    background-color: #121C2B;
+    border: 1px solid #1F2C40;
+    border-radius: 10px;
+}
+QLabel#fieldLabel {
+    color: #94A3B8;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#metadataKey {
+    color: #64748B;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#metadataValue {
+    color: #E2E8F0;
+    font-size: 12px;
+}
+QLabel#metadataValue[empty="true"] {
+    color: #475569;
+    font-style: italic;
+}
+QLineEdit#fieldInput,
+QTextEdit#fieldInput {
+    background-color: #111B2B;
+    border: 1px solid #243244;
+    border-radius: 8px;
+    color: #E2E8F0;
+    font-size: 12px;
+    padding: 8px;
+    selection-background-color: #2563EB;
+}
+QLineEdit#fieldInput:focus,
+QTextEdit#fieldInput:focus {
+    border-color: #3B82F6;
+}
+QLabel#errorText {
+    color: #F87171;
     font-size: 11px;
 }
 
@@ -411,6 +500,75 @@ def metadata_summary(metadata: dict) -> tuple[bool, str]:
     return True, "Metadata found"
 
 
+def first_metadata_value(metadata: dict, *keys: str) -> str:
+    """Return the first non-empty metadata value for the given tag names."""
+    for key in keys:
+        value = metadata.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            parts = [str(item).strip() for item in value if str(item).strip()]
+            if parts:
+                return ", ".join(parts)
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def metadata_edit_values(metadata: dict) -> dict[str, str]:
+    """Map raw ExifTool tags to the fields shown in the preview and editor."""
+    return {
+        "title": first_metadata_value(
+            metadata, "XMP:Title", "Title", "Headline", "IPTC:Headline"
+        ),
+        "description": first_metadata_value(
+            metadata,
+            "XMP:Description",
+            "Description",
+            "Caption-Abstract",
+            "IPTC:Caption-Abstract",
+        ),
+        "keywords": first_metadata_value(
+            metadata, "XMP:Subject", "Keywords", "IPTC:Keywords", "Subject"
+        ),
+        "categories": first_metadata_value(
+            metadata,
+            "XMP:Categories",
+            "Categories",
+            "IPTC:Categories",
+            "IPTC:Category",
+            "XMP:Category",
+        ),
+    }
+
+
+def split_metadata_list(text: str) -> list[str]:
+    """Turn a comma or newline separated field into a list of values."""
+    normalized = text.replace("\n", ",")
+    return [item.strip() for item in normalized.split(",") if item.strip()]
+
+
+def write_metadata_values(path: Path, values: dict[str, str]) -> None:
+    """Write the editable fields back to the file, replacing existing values."""
+    keywords = split_metadata_list(values["keywords"])
+    categories = split_metadata_list(values["categories"])
+    tags: dict[str, object] = {
+        "Headline": values["title"],
+        "Description": values["description"],
+        "Caption-Abstract": values["description"],
+        "Keywords": keywords or "",
+        "Categories": categories or "",
+        "XMP:Title": values["title"],
+        "XMP:Description": values["description"],
+        "XMP:Subject": keywords or "",
+    }
+
+    with ExifToolHelper() as et:
+        et.set_tags([str(path)], tags=tags, params=["-overwrite_original"])
+
+
 class CheckWorker(QRunnable):
     """Read metadata from a file without blocking the UI thread."""
 
@@ -472,6 +630,26 @@ class AddMetadataWorker(QRunnable):
             self.signals.done.emit(self.path, False, "GEMINI_API_KEY is not set")
         except Exception as exc:  # pragma: no cover - depends on runtime setup
             self.signals.done.emit(self.path, False, str(exc))
+
+
+class MetadataWorker(QRunnable):
+    """Read every metadata tag from a file without blocking the UI thread."""
+
+    class Signals(QObject):
+        done = Signal(object, object, str)
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self.path = path
+        self.signals = MetadataWorker.Signals()
+
+    def run(self) -> None:
+        try:
+            with ExifToolHelper() as et:
+                result = et.get_metadata(str(self.path))
+            self.signals.done.emit(self.path, result[0] if result else {}, "")
+        except Exception as exc:  # pragma: no cover - depends on exiftool install
+            self.signals.done.emit(self.path, {}, str(exc))
 
 
 class CheckBox(QCheckBox):
@@ -542,16 +720,19 @@ class CheckBox(QCheckBox):
 
 
 class FileRow(QFrame):
-    """One file entry with a metadata check and an add-metadata action."""
+    """One file entry with a metadata check and per-file metadata actions."""
 
     add_requested = Signal(object)
     check_toggled = Signal(object, bool)
+    preview_requested = Signal(object)
+    edit_requested = Signal(object)
 
     def __init__(self, path: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.path = path
         self.is_image = path.suffix.lower() in IMAGE_EXTENSIONS
         self.can_generate = path.suffix.lower() in GENERATABLE_EXTENSIONS
+        self.can_edit = self.is_image
         self.setObjectName("fileRow")
         self.setAttribute(Qt.WA_Hover, True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -600,6 +781,30 @@ class FileRow(QFrame):
         )
         layout.addWidget(self.checkbox, 0, Qt.AlignVCenter)
 
+        self.preview_button = QPushButton("Preview")
+        self.preview_button.setObjectName("secondaryButton")
+        self.preview_button.setCursor(Qt.PointingHandCursor)
+        self.preview_button.setMinimumWidth(74)
+        self.preview_button.setToolTip("Preview every metadata tag stored in this file")
+        self.preview_button.clicked.connect(
+            lambda: self.preview_requested.emit(self.path)
+        )
+        layout.addWidget(self.preview_button, 0, Qt.AlignVCenter)
+
+        self.edit_button = QPushButton("Edit")
+        self.edit_button.setObjectName("secondaryButton")
+        self.edit_button.setCursor(Qt.PointingHandCursor)
+        self.edit_button.setMinimumWidth(62)
+        self.edit_button.clicked.connect(lambda: self.edit_requested.emit(self.path))
+        if self.can_edit:
+            self.edit_button.setToolTip("Edit this file's title, description and tags")
+        else:
+            self.edit_button.setEnabled(False)
+            self.edit_button.setToolTip(
+                "This file type does not support metadata editing"
+            )
+        layout.addWidget(self.edit_button, 0, Qt.AlignVCenter)
+
         self.add_button = QPushButton("Add Metadata")
         self.add_button.setObjectName("primaryButton")
         self.add_button.setCursor(Qt.PointingHandCursor)
@@ -626,6 +831,13 @@ class FileRow(QFrame):
         self.add_button.setEnabled(not busy and self.can_generate)
         self.add_button.setText("Adding…" if busy else "Add Metadata")
         self.checkbox.setEnabled(not busy)
+        self.preview_button.setEnabled(not busy)
+        self.edit_button.setEnabled(not busy and self.can_edit)
+
+    def set_reading(self, reading: bool) -> None:
+        self.add_button.setEnabled(not reading and self.can_generate)
+        self.preview_button.setEnabled(not reading)
+        self.edit_button.setEnabled(not reading and self.can_edit)
 
     def matches(self, query: str) -> bool:
         return query in self.path.name.casefold()
@@ -727,6 +939,347 @@ class TitleBar(QFrame):
         super().mouseDoubleClickEvent(event)
 
 
+class DialogHeader(QFrame):
+    """Compact draggable header for the frameless metadata dialogs."""
+
+    def __init__(self, title: str, subtitle: str, dialog: QWidget) -> None:
+        super().__init__(dialog)
+        self._dialog = dialog
+        self._drag_offset: QPoint | None = None
+        self.setObjectName("dialogHeader")
+        self.setFixedHeight(56)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 0, 12, 0)
+        layout.setSpacing(10)
+
+        titles = QVBoxLayout()
+        titles.setSpacing(0)
+        titles.setContentsMargins(0, 0, 0, 0)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("dialogTitle")
+        title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("dialogSubtitle")
+        subtitle_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        subtitle_label.setToolTip(subtitle)
+        subtitle_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        titles.addWidget(title_label)
+        titles.addWidget(subtitle_label)
+
+        close = QToolButton()
+        close.setObjectName("closeButton")
+        close.setText("✕")
+        close.setToolTip("Close")
+        close.setCursor(Qt.PointingHandCursor)
+        close.setFixedSize(34, 28)
+        close.clicked.connect(dialog.reject)
+
+        layout.addLayout(titles, 1)
+        layout.addWidget(close)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_offset = (
+                event.globalPosition().toPoint() - self._dialog.frameGeometry().topLeft()
+            )
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+            self._dialog.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_offset = None
+        event.accept()
+
+
+class MetadataDialog(QDialog):
+    """Shared frameless shell for the metadata preview and editor dialogs."""
+
+    def __init__(
+        self,
+        path: Path,
+        title: str,
+        size: QSize,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.path = path
+        self.setObjectName("dialogRoot")
+        self.setWindowTitle(f"{title} — {path.name}")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setPalette(dark_palette())
+        self.setStyleSheet(STYLE_SHEET)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.resize(size)
+        self.setMinimumSize(540, 440)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(DialogHeader(title, path.name, self))
+
+        self.body = QVBoxLayout()
+        self.body.setContentsMargins(20, 18, 20, 18)
+        self.body.setSpacing(14)
+        root.addLayout(self.body, 1)
+
+
+class MetadataPreviewDialog(MetadataDialog):
+    """Read-only dialog showing key fields and every raw metadata tag."""
+
+    def __init__(
+        self,
+        path: Path,
+        metadata: dict,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(path, "Metadata preview", QSize(720, 620), parent)
+        values = metadata_edit_values(metadata)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("dialogScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content = QWidget()
+        content.setObjectName("dialogContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 6, 0)
+        content_layout.setSpacing(16)
+
+        if metadata:
+            content_layout.addWidget(self._build_key_card(metadata, values))
+            content_layout.addWidget(self._build_all_tags(metadata))
+        else:
+            empty = QLabel("No metadata found on this file.")
+            empty.setObjectName("emptyState")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setMinimumHeight(200)
+            content_layout.addWidget(empty)
+
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        close_button = QPushButton("Close")
+        close_button.setObjectName("secondaryButton")
+        close_button.setCursor(Qt.PointingHandCursor)
+        close_button.clicked.connect(self.reject)
+        footer.addWidget(close_button)
+
+        self.body.addWidget(scroll, 1)
+        self.body.addLayout(footer)
+
+    def _build_key_card(self, metadata: dict, values: dict[str, str]) -> QFrame:
+        card = QFrame()
+        card.setObjectName("metadataCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(12)
+
+        heading = QHBoxLayout()
+        heading.setSpacing(8)
+        title = QLabel("Key metadata")
+        title.setObjectName("sectionTitle")
+        count = QLabel(f"{len(metadata)} tags")
+        count.setObjectName("countBadge")
+        heading.addWidget(title)
+        heading.addWidget(count, 0, Qt.AlignVCenter)
+        heading.addStretch(1)
+        layout.addLayout(heading)
+
+        for label, key in (
+            ("Title", "title"),
+            ("Description", "description"),
+            ("Keywords", "keywords"),
+            ("Categories", "categories"),
+        ):
+            layout.addLayout(self._field_block(label, values[key]))
+
+        return card
+
+    def _build_all_tags(self, metadata: dict) -> QWidget:
+        container = QWidget()
+        container.setObjectName("dialogContent")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        title = QLabel("All tags")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(8)
+
+        row = 0
+        for key in sorted(metadata, key=str.casefold):
+            value = first_metadata_value(metadata, key)
+            if not value:
+                continue
+
+            key_label = QLabel(key)
+            key_label.setObjectName("metadataKey")
+            key_label.setWordWrap(True)
+            key_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+            value_label = QLabel(value)
+            value_label.setObjectName("metadataValue")
+            value_label.setWordWrap(True)
+            value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            value_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+            grid.addWidget(key_label, row, 0)
+            grid.addWidget(value_label, row, 1)
+            row += 1
+
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
+        return container
+
+    @staticmethod
+    def _field_block(label: str, value: str) -> QVBoxLayout:
+        block = QVBoxLayout()
+        block.setSpacing(2)
+
+        field_label = QLabel(label)
+        field_label.setObjectName("fieldLabel")
+
+        value_label = QLabel(value or "Not set")
+        value_label.setObjectName("metadataValue")
+        value_label.setProperty("empty", "false" if value else "true")
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        block.addWidget(field_label)
+        block.addWidget(value_label)
+        return block
+
+
+class MetadataEditDialog(MetadataDialog):
+    """Form dialog that writes title, description, keywords and categories."""
+
+    saved = Signal(object)
+
+    def __init__(
+        self,
+        path: Path,
+        metadata: dict,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(path, "Edit metadata", QSize(660, 660), parent)
+        self.setMinimumSize(560, 600)
+        values = metadata_edit_values(metadata)
+
+        self.title_input = QLineEdit(values["title"])
+        self.title_input.setObjectName("fieldInput")
+        self.title_input.setPlaceholderText("Add a title")
+        self.title_input.setClearButtonEnabled(True)
+        self.body.addWidget(self._field("Title", self.title_input))
+
+        self.description_input = QTextEdit()
+        self.description_input.setObjectName("fieldInput")
+        self.description_input.setPlaceholderText("Describe the file")
+        self.description_input.setPlainText(values["description"])
+        self.description_input.setFixedHeight(108)
+        self.body.addWidget(self._field("Description", self.description_input))
+
+        self.keywords_input = QTextEdit()
+        self.keywords_input.setObjectName("fieldInput")
+        self.keywords_input.setPlaceholderText("keyword one, keyword two")
+        self.keywords_input.setPlainText(values["keywords"])
+        self.keywords_input.setFixedHeight(78)
+        self.body.addWidget(self._field("Keywords", self.keywords_input))
+
+        self.categories_input = QLineEdit(values["categories"])
+        self.categories_input.setObjectName("fieldInput")
+        self.categories_input.setPlaceholderText("category one, category two")
+        self.categories_input.setClearButtonEnabled(True)
+        self.body.addWidget(self._field("Categories", self.categories_input))
+
+        self.error_label = QLabel("")
+        self.error_label.setObjectName("errorText")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        self.body.addWidget(self.error_label)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.setCursor(Qt.PointingHandCursor)
+        cancel_button.clicked.connect(self.reject)
+        footer.addWidget(cancel_button)
+
+        self.save_button = QPushButton("Save changes")
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.setCursor(Qt.PointingHandCursor)
+        self.save_button.setDefault(True)
+        self.save_button.clicked.connect(self._save)
+        footer.addWidget(self.save_button)
+
+        self.body.addLayout(footer)
+
+        save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        save_shortcut.activated.connect(self._save)
+        self.title_input.setFocus()
+
+    def _field(self, label: str, widget: QWidget) -> QWidget:
+        container = QWidget()
+        container.setObjectName("dialogContent")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        field_label = QLabel(label)
+        field_label.setObjectName("fieldLabel")
+        field_label.setBuddy(widget)
+
+        layout.addWidget(field_label)
+        layout.addWidget(widget)
+        return container
+
+    def _save(self) -> None:
+        if not self.path.exists():
+            self._show_error("This file no longer exists.")
+            return
+
+        values = {
+            "title": self.title_input.text().strip(),
+            "description": self.description_input.toPlainText().strip(),
+            "keywords": self.keywords_input.toPlainText().strip(),
+            "categories": self.categories_input.text().strip(),
+        }
+
+        try:
+            write_metadata_values(self.path, values)
+        except Exception as exc:  # pragma: no cover - depends on exiftool install
+            self._show_error(f"Could not save metadata: {exc}")
+            return
+
+        self.saved.emit(self.path)
+        self.accept()
+
+    def _show_error(self, message: str) -> None:
+        self.error_label.setText(message)
+        self.error_label.show()
+
+
 class MetadataWindow(QWidget):
     """Main window: lists the current directory with per-file metadata actions."""
 
@@ -737,6 +1290,8 @@ class MetadataWindow(QWidget):
         self._rows_by_path: dict[Path, FileRow] = {}
         self._check_workers: dict[Path, CheckWorker] = {}
         self._add_workers: dict[Path, AddMetadataWorker] = {}
+        self._metadata_workers: dict[Path, MetadataWorker] = {}
+        self._pending_metadata_action: dict[Path, str] = {}
         self._thread_pool = QThreadPool(self)
         self._thread_pool.setMaxThreadCount(4)
 
@@ -910,6 +1465,8 @@ class MetadataWindow(QWidget):
         row = FileRow(path)
         row.add_requested.connect(self._on_add_requested)
         row.check_toggled.connect(self._on_check_toggled)
+        row.preview_requested.connect(self._on_preview_requested)
+        row.edit_requested.connect(self._on_edit_requested)
         self.list_layout.insertWidget(self.list_layout.count() - 1, row)
         self._rows.append(row)
         self._rows_by_path[path] = row
@@ -969,6 +1526,71 @@ class MetadataWindow(QWidget):
 
         row.set_status(message, "success" if found else "warning")
         self.set_status(f"{path.name}: {message}", "success" if found else "warning")
+
+    def _on_preview_requested(self, path: Path) -> None:
+        self._start_metadata_action(path, "preview")
+
+    def _on_edit_requested(self, path: Path) -> None:
+        self._start_metadata_action(path, "edit")
+
+    def _start_metadata_action(self, path: Path, action: str) -> None:
+        row = self._rows_by_path.get(path)
+        if row is None or path in self._metadata_workers:
+            return
+
+        row.set_reading(True)
+        row.set_status("Reading metadata…", "info")
+        self.set_status(f"Reading metadata from {path.name}…", "info")
+
+        worker = MetadataWorker(path)
+        worker.signals.done.connect(self._on_metadata_loaded)
+        self._metadata_workers[path] = worker
+        self._pending_metadata_action[path] = action
+        self._thread_pool.start(worker)
+
+    def _on_metadata_loaded(self, path: Path, metadata: dict, error: str) -> None:
+        self._metadata_workers.pop(path, None)
+        action = self._pending_metadata_action.pop(path, "preview")
+        row = self._rows_by_path.get(path)
+        if row is not None:
+            row.set_reading(False)
+
+        if error:
+            message = f"Could not read metadata: {error}"
+            if row is not None:
+                row.set_status(message, "error")
+            self.set_status(f"{path.name}: {message}", "error")
+            return
+
+        if row is not None:
+            row.set_status("")
+
+        if action == "edit":
+            self.set_status(f"Editing metadata for {path.name}", "info")
+            self._open_edit_dialog(path, metadata)
+        else:
+            self.set_status(f"Previewing metadata for {path.name}", "info")
+            self._open_preview_dialog(path, metadata)
+
+    def _open_preview_dialog(self, path: Path, metadata: dict) -> None:
+        dialog = MetadataPreviewDialog(path, metadata, self)
+        dialog.exec()
+
+    def _open_edit_dialog(self, path: Path, metadata: dict) -> None:
+        dialog = MetadataEditDialog(path, metadata, self)
+        dialog.saved.connect(self._on_metadata_saved)
+        dialog.exec()
+
+    def _on_metadata_saved(self, path: Path) -> None:
+        row = self._rows_by_path.get(path)
+        if row is None:
+            return
+
+        row.set_status("Metadata updated", "success")
+        row.checkbox.blockSignals(True)
+        row.checkbox.setChecked(True)
+        row.checkbox.blockSignals(False)
+        self.set_status(f"Metadata updated for {path.name}", "success")
 
     def _on_add_requested(self, path: Path) -> None:
         row = self._rows_by_path.get(path)
