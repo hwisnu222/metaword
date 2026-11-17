@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -1281,7 +1282,7 @@ class MetadataEditDialog(MetadataDialog):
 
 
 class MetadataWindow(QWidget):
-    """Main window: lists the current directory with per-file metadata actions."""
+    """Main window: lists the selected directory with per-file metadata actions."""
 
     def __init__(self, directory: Path | None = None) -> None:
         super().__init__()
@@ -1339,9 +1340,17 @@ class MetadataWindow(QWidget):
 
         self.path_label = QLabel(str(self.directory))
         self.path_label.setObjectName("pathLabel")
+        self.path_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.path_label.setToolTip(str(self.directory))
         heading.addWidget(self.path_label)
         header.addLayout(heading, 1)
+
+        self.choose_button = QPushButton("Choose folder")
+        self.choose_button.setObjectName("secondaryButton")
+        self.choose_button.setCursor(Qt.PointingHandCursor)
+        self.choose_button.setToolTip("Choose which folder to list")
+        self.choose_button.clicked.connect(self._choose_directory)
+        header.addWidget(self.choose_button, 0, Qt.AlignTop)
 
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.setObjectName("secondaryButton")
@@ -1422,11 +1431,29 @@ class MetadataWindow(QWidget):
     def _install_shortcuts(self) -> None:
         for sequence, handler in (
             ("Ctrl+Q", self.close),
+            ("Ctrl+O", self._choose_directory),
             ("F5", self.refresh),
             ("Ctrl+F", self.search_input.setFocus),
         ):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.activated.connect(handler)
+
+    def _choose_directory(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self, "Choose folder", str(self.directory)
+        )
+        if not selected:
+            return
+
+        directory = Path(selected).resolve()
+        if directory == self.directory:
+            return
+
+        self.directory = directory
+        self.path_label.setText(str(directory))
+        self.path_label.setToolTip(str(directory))
+        self.search_input.clear()
+        self.refresh()
 
     def refresh(self) -> None:
         self._clear_rows()
@@ -1551,6 +1578,9 @@ class MetadataWindow(QWidget):
     def _on_metadata_loaded(self, path: Path, metadata: dict, error: str) -> None:
         self._metadata_workers.pop(path, None)
         action = self._pending_metadata_action.pop(path, "preview")
+        if path.parent != self.directory:
+            return
+
         row = self._rows_by_path.get(path)
         if row is not None:
             row.set_reading(False)
@@ -1645,7 +1675,7 @@ def run() -> None:
     app.setFont(font)
 
     window = MetadataWindow()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())
 
 
