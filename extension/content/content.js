@@ -19,6 +19,8 @@ let fetchedAt = 0;
 let openToken = 0;
 let suppressFocus = false;
 let position = null;
+let searchInput = null;
+const thumbnailRequests = new Map();
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -94,8 +96,11 @@ function insert(value) {
   });
 }
 
-function option(label, value, valueClass) {
-  const button = element("button", "mw-option");
+function option(label, value, valueClass, wide = false) {
+  const button = element(
+    "button",
+    wide ? "mw-option mw-option--wide" : "mw-option",
+  );
   button.type = "button";
   button.title = value;
   button.append(
@@ -117,6 +122,7 @@ function optionsFor(file) {
         "Description",
         file.description.trim(),
         "mw-value mw-value--description",
+        true,
       ),
     );
   }
@@ -129,6 +135,56 @@ function optionsFor(file) {
     rows.push(option("Category", categories, "mw-value"));
   }
   return rows;
+}
+
+function fileExtension(name) {
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "FILE" : name.slice(dot + 1, dot + 5).toUpperCase();
+}
+
+function loadThumbnail(path) {
+  if (!thumbnailRequests.has(path)) {
+    thumbnailRequests.set(
+      path,
+      browser.runtime
+        .sendMessage({ type: "fetch-thumbnail", path })
+        .then((result) => (result.ok ? result.url : null))
+        .catch(() => null),
+    );
+  }
+  return thumbnailRequests.get(path);
+}
+
+function createFileCard(file, optionNodes) {
+  const item = element("li", "mw-file");
+  const head = element("div", "mw-file-head");
+  const thumb = element("span", "mw-thumb");
+  thumb.setAttribute("aria-hidden", "true");
+  thumb.append(
+    element("span", "mw-thumb-fallback", fileExtension(file.name)),
+  );
+  const meta = element("div", "mw-file-meta");
+  meta.append(element("p", "mw-name", file.name));
+  head.append(thumb, meta);
+
+  const options = element("div", "mw-options");
+  options.append(...optionNodes);
+  item.append(head, options);
+
+  if (file.thumbnail) {
+    loadThumbnail(file.thumbnail).then((url) => {
+      if (!url) {
+        return;
+      }
+      const image = document.createElement("img");
+      image.className = "mw-thumb-image";
+      image.src = url;
+      image.alt = "";
+      thumb.replaceChildren(image);
+    });
+  }
+
+  return item;
 }
 
 function message(text, error = false) {
@@ -154,15 +210,21 @@ function render() {
     return;
   }
 
+  const query = searchInput.value.trim().toLowerCase();
+  const visibleFiles = query
+    ? files.filter((file) => file.name.toLowerCase().includes(query))
+    : files;
+  if (!visibleFiles.length) {
+    panelBody.append(message(`No files match "${searchInput.value.trim()}".`));
+    return;
+  }
+
   const list = element("ul", "mw-list");
-  for (const file of files) {
-    const rows = optionsFor(file);
-    if (!rows.length) {
-      continue;
+  for (const file of visibleFiles) {
+    const optionNodes = optionsFor(file);
+    if (optionNodes.length) {
+      list.append(createFileCard(file, optionNodes));
     }
-    const item = element("li", "mw-file");
-    item.append(element("p", "mw-name", file.name), ...rows);
-    list.append(item);
   }
 
   panelBody.append(list.children.length ? list : message("No metadata yet."));
@@ -295,8 +357,17 @@ function createPanel() {
   close.addEventListener("click", hide);
 
   header.append(refresh, close);
+
+  const searchWrap = element("div", "mw-search-wrap");
+  searchInput = element("input", "mw-search");
+  searchInput.type = "search";
+  searchInput.placeholder = "Search files";
+  searchInput.setAttribute("aria-label", "Search files by name");
+  searchInput.addEventListener("input", render);
+  searchWrap.append(searchInput);
+
   panelBody = element("div", "mw-body");
-  root.append(header, panelBody);
+  root.append(header, searchWrap, panelBody);
   document.body.append(root);
   return root;
 }
@@ -304,6 +375,9 @@ function createPanel() {
 panel = createPanel();
 
 document.addEventListener("focusin", (event) => {
+  if (panel.contains(event.target)) {
+    return;
+  }
   if (suppressFocus && event.target === target) {
     return;
   }
