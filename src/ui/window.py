@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QCloseEvent, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -33,6 +33,12 @@ from ui.styles.theme import STATUS_COLORS, dark_palette, load_stylesheet
 from ui.widgets import FileRow, TitleBar, clear_icon
 from ui.worker.metadata import AddMetadataWorker, CheckWorker, MetadataWorker
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from server.api import ApiServer
+
 
 class MetadataWindow(QWidget):
     """Main window: lists the selected directory with per-file metadata actions."""
@@ -48,6 +54,7 @@ class MetadataWindow(QWidget):
         self._pending_metadata_action: dict[Path, str] = {}
         self._thread_pool = QThreadPool(self)
         self._thread_pool.setMaxThreadCount(4)
+        self.api_server: ApiServer | None = None
 
         self.setWindowTitle("Metaword — Metadata Manager")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -111,6 +118,21 @@ class MetadataWindow(QWidget):
         self.refresh_button.clicked.connect(self.refresh)
         header.addWidget(self.refresh_button, 0, Qt.AlignTop)
 
+        self.start_server_button = QPushButton("Start API")
+        self.start_server_button.setObjectName("secondaryButton")
+        self.start_server_button.setCursor(Qt.PointingHandCursor)
+        self.start_server_button.setToolTip("Start the local API for this folder")
+        self.start_server_button.clicked.connect(self._start_api_server)
+        header.addWidget(self.start_server_button, 0, Qt.AlignTop)
+
+        self.stop_server_button = QPushButton("Stop API")
+        self.stop_server_button.setObjectName("secondaryButton")
+        self.stop_server_button.setCursor(Qt.PointingHandCursor)
+        self.stop_server_button.setToolTip("Stop the local API server")
+        self.stop_server_button.clicked.connect(self._stop_api_server)
+        self.stop_server_button.setEnabled(False)
+        header.addWidget(self.stop_server_button, 0, Qt.AlignTop)
+
         content_layout.addLayout(header)
 
         self.search_input = QLineEdit()
@@ -168,11 +190,14 @@ class MetadataWindow(QWidget):
         )
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusText")
+        self.api_label = QLabel("")
+        self.api_label.setObjectName("statusMeta")
         self.summary_label = QLabel("")
         self.summary_label.setObjectName("statusMeta")
 
         layout.addWidget(self.status_dot)
         layout.addWidget(self.status_label, 1)
+        layout.addWidget(self.api_label)
         layout.addWidget(self.summary_label)
 
         grip = QSizeGrip(status_bar)
@@ -205,6 +230,8 @@ class MetadataWindow(QWidget):
         self.directory = directory
         self.path_label.setText(str(directory))
         self.path_label.setToolTip(str(directory))
+        if self.api_server is not None:
+            self.api_server.set_directory(directory)
         self.search_input.clear()
         self.refresh()
 
@@ -413,6 +440,35 @@ class MetadataWindow(QWidget):
         color = STATUS_COLORS.get(tone, STATUS_COLORS["info"])
         self.status_dot.setStyleSheet(f"color: {color}; font-size: 9px;")
         self.status_label.setText(text)
+
+    def _start_api_server(self) -> None:
+        server = ApiServer(self.directory)
+        try:
+            server.start()
+        except OSError as exc:
+            self.set_status(f"Could not start API server: {exc}", "error")
+            return
+
+        self.api_server = server
+        self.start_server_button.setEnabled(False)
+        self.stop_server_button.setEnabled(True)
+        self.api_label.setText(f"API · {server.url}")
+        self.set_status(f"API server running on {server.url}", "success")
+
+    def _stop_api_server(self) -> None:
+        if self.api_server is None:
+            return
+
+        self.api_server.stop()
+        self.api_server = None
+        self.start_server_button.setEnabled(True)
+        self.stop_server_button.setEnabled(False)
+        self.api_label.setText("")
+        self.set_status("API server stopped", "info")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._stop_api_server()
+        super().closeEvent(event)
 
 
 def run() -> None:

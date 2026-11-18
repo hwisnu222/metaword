@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Metaword Picker",
+  "version": "0.2.0",
+  "description": "Insert metadata from the Metaword desktop app into fields on stock contribution and e-commerce pages.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "metaword@local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://contributor.stock.adobe.com/*",
+        "https://app.amazecommerce.com/*"
+      ],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "32": "icons/icon.svg"
+  }
+}
